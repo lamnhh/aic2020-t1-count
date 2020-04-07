@@ -209,21 +209,21 @@ def process(tracking_path, cam_id, video_id, video_path):
 
 
 if __name__ == "__main__":
-    # for filename in os.listdir("videos"):
-    #     video_id, ext = os.path.splitext(filename)
-    #     if ext != ".mp4":
-    #         continue
-    #
-    #     cam_id = "_".join(video_id.split("_")[0:2])
-    #     process(
-    #         os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
-    #         cam_id,
-    #         video_id,
-    #         os.path.join("videos", "%s.mp4" % video_id)
-    #     )
-    process(
-        os.path.join("tracking-results", "info_%s.mp4.npy" % "cam_7"),
-        "cam_7",
-        "cam_7",
-        os.path.join("videos", "cam_7.mp4")
-    )
+    for filename in os.listdir("videos"):
+        video_id, ext = os.path.splitext(filename)
+        if ext != ".mp4":
+            continue
+
+        cam_id = "_".join(video_id.split("_")[0:2])
+        process(
+            os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
+            cam_id,
+            video_id,
+            os.path.join("videos", "%s.mp4" % video_id)
+        )
+    # process(
+    #     os.path.join("tracking-results", "info_%s.mp4.npy" % "cam_7"),
+    #     "cam_7",
+    #     "cam_7",
+    #     os.path.join("videos", "cam_7.mp4")
+    # )
