@@ -1,4 +1,7 @@
 moi/*
 roi/*
+videos/*
 tracking-results/*
+.vscode/*
+.idea/*
 !.gitkeep
