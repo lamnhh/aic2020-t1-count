@@ -1,8 +1,10 @@
 import numpy as np
+import math
 import os
 import json
 import cv2
 from tqdm import tqdm
+import matplotlib.path as mplPath
 
 
 def ccw(a, b, c):
@@ -55,35 +57,77 @@ def intersect_with_roi(roi, x1, y1, x2, y2):
     return False
 
 
-def dist(x1, y1, x2, y2, x3, y3):
-    px = x2-x1
-    py = y2-y1
-
-    norm = px*px + py*py
-
-    u = ((x3 - x1) * px + (y3 - y1) * py) / float(norm)
-
-    if u > 1:
-        u = 1
-    elif u < 0:
-        u = 0
-
-    x = x1 + u * px
-    y = y1 + u * py
-
-    dx = x - x3
-    dy = y - y3
-
-    return (dx*dx + dy*dy)**.5
+def inside_roi(roi, point):
+    pol = mplPath.Path(roi)
+    return pol.contains_point(point, radius=1)
 
 
-def min_distance_to_polygon(polygon, point):
-    ans = 1e9
-    for i in range(len(polygon)):
-        ps = polygon[i]
-        pt = polygon[(i + 1) % len(polygon)]
-        ans = min(ans, dist(*ps, *pt, *point))
-    return ans
+# def dist(x1, y1, x2, y2, x3, y3):
+#     px = x2-x1
+#     py = y2-y1
+#
+#     norm = px*px + py*py
+#
+#     u = ((x3 - x1) * px + (y3 - y1) * py) / float(norm)
+#
+#     if u > 1:
+#         u = 1
+#     elif u < 0:
+#         u = 0
+#
+#     x = x1 + u * px
+#     y = y1 + u * py
+#
+#     dx = x - x3
+#     dy = y - y3
+#
+#     return (dx*dx + dy*dy)**.5
+#
+#
+# def min_distance_to_polygon(polygon, point):
+#     ans = 1e9
+#     for i in range(len(polygon)):
+#         ps = polygon[i]
+#         pt = polygon[(i + 1) % len(polygon)]
+#         ans = min(ans, dist(*ps, *pt, *point))
+#     return ans
+
+
+def line_intersection(line1, line2):
+    xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
+    ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
+
+    def det(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    div = det(xdiff, ydiff)
+    if div == 0:
+       raise Exception('lines do not intersect')
+
+    d = (det(*line1), det(*line2))
+    x = det(d, xdiff) / div
+    y = det(d, ydiff) / div
+    return x, y
+
+
+def dist(x1, y1, x2, y2):
+    return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+
+
+def almost_touch_roi(roi, x1, y1, x2, y2, velocity):
+    point = ((x1 + x2) / 2, (y1 + y2) / 2)
+    lowest_dist = 1e9
+    endpoint = (point[0] + velocity[0] * 10, point[1] + velocity[1] * 10)
+    for i in range(len(roi)):
+        p = roi[i]
+        q = roi[(i + 1) % len(roi)]
+        if intersect(point, endpoint, p, q):
+            try:
+                x, y = line_intersection([point, endpoint], [p, q])
+                lowest_dist = min(lowest_dist, dist(point[0], point[1], x, y))
+            except:
+                pass
+    return lowest_dist <= max(max(abs(y2 - y1), abs(x2 - x1)) / 2, 70)
 
 
 def is_outside_of_image(x, y, width, height):
@@ -93,17 +137,36 @@ def is_outside_of_image(x, y, width, height):
 def solve(occurrence_list, moi_list, roi, height, width, moi_weight):
     ans = np.zeros((height, width))
     path = []
-    mark = []
     for fid, x1, y1, x2, y2 in occurrence_list:
         cx = (x1 + x2) / 2
         cy = (y1 + y2) / 2
         path.append((int(cx), int(cy)))
-        mark.append(intersect_with_roi(roi, x1, y1, x2, y2))
 
+    path = [(2 * path[0][0] - path[1][0], 2 * path[0][1] - path[1][1])] + path
     for i in range(len(path) - 1):
         ps = path[i]
         pt = path[i + 1]
-        ans = cv2.line(ans, ps, pt, (255, 255, 255), 20)
+        ans = cv2.line(ans, ps, pt, (255, 255, 255), 50)
+    path = path[1:]
+
+    if not inside_roi(roi, path[-1]):
+        tmp = 0
+        while len(path) > 0 and not inside_roi(roi, path[-1]):
+            tmp = path[-1]
+            path = path[:-1]
+        if tmp == 0:
+            return -1, -1, [0, 0, 0, 0]
+        path.append(tmp)
+
+    # Check if path is inside ANY MOI. If not, return immediately
+    found = False
+    for moi in moi_list:
+        overlapped = np.sum(np.minimum(moi, ans))
+        if overlapped > 0:
+            found = True
+            break
+    if not found:
+        return -1, -1, [0, 0, 0, 0]
 
     best_match = -1e9
     best_moi = 0
@@ -111,21 +174,20 @@ def solve(occurrence_list, moi_list, roi, height, width, moi_weight):
         overlapped = np.sum(np.minimum(moi, ans) * moi_weight) / 255
         left = np.sum(np.minimum(255 - moi, ans) * moi_weight) / 255
 
-        weight = overlapped - left
+        weight = overlapped - 2 * left
 
         if best_match < weight:
             best_match = weight
             best_moi = idx
 
+    prev = max(0, len(path) - 10)
+    vx = (path[-1][0] - path[prev][0]) / (occurrence_list[-1][0] - occurrence_list[prev][0])
+    vy = (path[-1][1] - path[prev][1]) / (occurrence_list[-1][0] - occurrence_list[prev][0])
     for i in range(len(path) - 1, -1, -1):
-        x1, y1, x2, y2 = occurrence_list[i][1:]
-        cx = (x1 + x2) / 2
-        cy = (y1 + y2) / 2
-        if min_distance_to_polygon(roi, (cx, cy)) > 50:
-            continue
-        if not mark[i]:
+        if inside_roi(roi, path[i]) and almost_touch_roi(roi, *occurrence_list[i][1:], (vx, vy)):
             return best_moi + 1, occurrence_list[i][0], occurrence_list[i][1:]
-
+        if i > 0 and not inside_roi(roi, path[i]) and inside_roi(roi, path[i - 1]):
+            return best_moi + 1, occurrence_list[i][0], occurrence_list[i][1:]
     return -1, -1, [0, 0, 0, 0]
 
 
@@ -154,10 +216,9 @@ def process(tracking_path, cam_id, video_id, video_path):
     moi_list = load_moi_list(cam_id)
     with open(os.path.join("roi", "%s_new.json" % cam_id), "r") as f:
         roi = json.load(f)
-    moi_weight = 255 / (255 + sum(moi_list))
+    moi_weight = math.e ** (255 / (255 + sum(moi_list)))
 
     x = np.load(tracking_path, allow_pickle=True)
-    x = x[0:300]
 
     num_vehicle = 0
     class_ids = {}
@@ -171,6 +232,7 @@ def process(tracking_path, cam_id, video_id, video_path):
 
     ans = [[] for i in range(x.shape[0])]
     for vehicle_id in tqdm(range(num_vehicle)):
+    # for vehicle_id in range(272, 273):
         occurrence_list = []
         for frame_id in range(x.shape[0]):
             for track_id in range(x[frame_id].shape[0]):
@@ -187,6 +249,12 @@ def process(tracking_path, cam_id, video_id, video_path):
         moi_id, frame_id, bbox = solve(occurrence_list, moi_list, roi, height, width, moi_weight)
         if moi_id != -1:
             ans[frame_id].append([moi_id, vehicle_id, class_ids[vehicle_id], bbox])
+
+    print("Writing results to %s.txt" % video_id)
+    with open("%s.txt" % video_id, "w") as f:
+        for frame_id in tqdm(range(x.shape[0])):
+            for moi_id, _, v_type, _ in ans[frame_id]:
+                f.write(f"{video_ids[video_id]},{frame_id + 1},{moi_id},{v_type}\n")
 
     print("Creating video")
     output = cv2.VideoWriter("output_%s.mp4" % video_id, cv2.VideoWriter_fourcc("m", "p", "4", "v"), fps, (width, height))
@@ -209,6 +277,13 @@ def process(tracking_path, cam_id, video_id, video_path):
 
 
 if __name__ == "__main__":
+    video_ids = {}
+    with open(os.path.join("videos", "list_video_id.txt"), "r") as f:
+        lines = f.read().splitlines()
+        for line in lines:
+            video_id, name = line.split(" ")
+            video_ids[name.split(".")[0]] = video_id
+
     for filename in os.listdir("videos"):
         video_id, ext = os.path.splitext(filename)
         if ext != ".mp4":
@@ -221,9 +296,3 @@ if __name__ == "__main__":
             video_id,
             os.path.join("videos", "%s.mp4" % video_id)
         )
-    # process(
-    #     os.path.join("tracking-results", "info_%s.mp4.npy" % "cam_7"),
-    #     "cam_7",
-    #     "cam_7",
-    #     os.path.join("videos", "cam_7.mp4")
-    # )
