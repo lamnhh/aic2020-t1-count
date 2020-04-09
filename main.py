@@ -219,7 +219,7 @@ def process(tracking_path, cam_id, video_id, video_path):
 
     width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cv2.CAP_PROP_FRAME_COUNT)
+    fps = int(video.get(cv2.CAP_PROP_FPS))
 
     moi_list = load_moi_list(cam_id)
     with open(os.path.join("roi", "%s_new.json" % cam_id), "r") as f:
@@ -231,25 +231,27 @@ def process(tracking_path, cam_id, video_id, video_path):
     num_frame = 0
     num_vehicle = 0
     class_ids = {}
-    for class_id, frame_id, _, object_id, _, _, _, _ in x:
+    occ_map = {}
+    for class_id, frame_id, _, object_id, x_min, y_min, x_max, y_max in x:
         num_vehicle = max(num_vehicle, object_id)
         num_frame = max(num_frame, frame_id)
-        class_ids[object_id] = class_id
+        class_ids[int(object_id)] = int(class_id)
+        if int(object_id) not in occ_map:
+            occ_map[int(object_id)] = []
+        x_min = max(1, x_min)
+        y_min = max(1, y_min)
+        x_max = min(width, x_max)
+        y_max = min(height, y_max)
+        occ_map[int(object_id)].append([int(frame_id), x_min, y_min, x_max, y_max])
     num_vehicle = int(num_vehicle + 1)
     num_frame = int(num_frame + 1)
 
     ans = [[] for i in range(num_frame)]
     for vehicle_id in tqdm(range(num_vehicle)):
     # for vehicle_id in range(39, 40):
-        occurrence_list = []
-        for class_id, frame_id, _, object_id, x_min, y_min, x_max, y_max in x:
-            if object_id == vehicle_id:
-                # print(class_id, confident_score, x_min, y_min, x_max, y_max)
-                x_min = max(1, x_min)
-                y_min = max(1, y_min)
-                x_max = min(width, x_max)
-                y_max = min(height, y_max)
-                occurrence_list.append([int(frame_id), x_min, y_min, x_max, y_max])
+        if vehicle_id not in occ_map:
+            continue
+        occurrence_list = occ_map[vehicle_id]
         if len(occurrence_list) <= 1:
             continue
         moi_id, frame_id, bbox = solve(occurrence_list, moi_list, roi, height, width, moi_weight)
@@ -265,7 +267,7 @@ def process(tracking_path, cam_id, video_id, video_path):
     print("Creating video")
     output = cv2.VideoWriter("output_%s.mp4" % video_id, cv2.VideoWriter_fourcc("m", "p", "4", "v"), fps, (width, height))
     for frame_id in tqdm(range(num_frame)):
-        _, frame = video.read()
+        ret, frame = video.read()
         for moi_id, v_id, v_type, [x1, y1, x2, y2] in ans[frame_id]:
             frame = cv2.putText(
                 frame,
@@ -290,23 +292,23 @@ if __name__ == "__main__":
             video_id, name = line.split(" ")
             video_ids[name.split(".")[0]] = video_id
 
-    for filename in os.listdir("videos"):
-        video_id, ext = os.path.splitext(filename)
-        if ext != ".mp4":
-            continue
+    # for filename in os.listdir("videos"):
+    #     video_id, ext = os.path.splitext(filename)
+    #     if ext != ".mp4":
+    #         continue
+    #
+    #     cam_id = "_".join(video_id.split("_")[0:2])
+    #     process(
+    #         os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
+    #         cam_id,
+    #         video_id,
+    #         os.path.join("videos", "%s.mp4" % video_id)
+    #     )
 
-        cam_id = "_".join(video_id.split("_")[0:2])
-        process(
-            os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
-            cam_id,
-            video_id,
-            os.path.join("videos", "%s.mp4" % video_id)
-        )
-
-    # cam_id = "cam_11"
-    # process(
-    #     os.path.join("tracking-results", "info_%s.mp4.npy" % cam_id),
-    #     cam_id,
-    #     cam_id,
-    #     os.path.join("videos", "%s.mp4" % cam_id)
-    # )
+    cam_id = "cam_1"
+    process(
+        os.path.join("tracking-results", "info_%s.mp4.npy" % cam_id),
+        cam_id,
+        cam_id,
+        os.path.join("videos", "%s.mp4" % cam_id)
+    )
