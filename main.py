@@ -114,7 +114,7 @@ def dist(x1, y1, x2, y2):
     return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
-def almost_touch_roi(roi, x1, y1, x2, y2, velocity):
+def almost_touch_roi(roi, x1, y1, x2, y2, velocity, moi):
     point = ((x1 + x2) / 2, (y1 + y2) / 2)
     lowest_dist = 1e9
     endpoint = (point[0] + velocity[0] * 10, point[1] + velocity[1] * 10)
@@ -124,10 +124,11 @@ def almost_touch_roi(roi, x1, y1, x2, y2, velocity):
         if intersect(point, endpoint, p, q):
             try:
                 x, y = line_intersection([point, endpoint], [p, q])
-                lowest_dist = min(lowest_dist, dist(point[0], point[1], x, y))
+                if moi[int(y)][int(x)] > 0:
+                    lowest_dist = min(lowest_dist, dist(point[0], point[1], x, y))
             except:
                 pass
-    return lowest_dist <= max(max(abs(y2 - y1), abs(x2 - x1)) / 2, 70)
+    return lowest_dist <= max(max(abs(y2 - y1), abs(x2 - x1)) * 0.8, 100)
 
 
 def is_outside_of_image(x, y, width, height):
@@ -142,13 +143,6 @@ def solve(occurrence_list, moi_list, roi, height, width, moi_weight):
         cy = (y1 + y2) / 2
         path.append((int(cx), int(cy)))
 
-    path = [(2 * path[0][0] - path[1][0], 2 * path[0][1] - path[1][1])] + path
-    for i in range(len(path) - 1):
-        ps = path[i]
-        pt = path[i + 1]
-        ans = cv2.line(ans, ps, pt, (255, 255, 255), 50)
-    path = path[1:]
-
     if not inside_roi(roi, path[-1]):
         tmp = 0
         while len(path) > 0 and not inside_roi(roi, path[-1]):
@@ -157,6 +151,17 @@ def solve(occurrence_list, moi_list, roi, height, width, moi_weight):
         if tmp == 0:
             return -1, -1, [0, 0, 0, 0]
         path.append(tmp)
+
+    if len(path) <= 1:
+        return -1, -1, [0, 0, 0, 0]
+    occurrence_list = occurrence_list[:len(path)]
+
+    path = [(2 * path[0][0] - path[1][0], 2 * path[0][1] - path[1][1])] + path
+    for i in range(len(path) - 1):
+        ps = path[i]
+        pt = path[i + 1]
+        ans = cv2.line(ans, ps, pt, (255, 255, 255), 50)
+    path = path[1:]
 
     # Check if path is inside ANY MOI. If not, return immediately
     found = False
@@ -168,23 +173,26 @@ def solve(occurrence_list, moi_list, roi, height, width, moi_weight):
     if not found:
         return -1, -1, [0, 0, 0, 0]
 
-    best_match = -1e9
+    best_match = -1e12
     best_moi = 0
     for idx, moi in enumerate(moi_list):
         overlapped = np.sum(np.minimum(moi, ans) * moi_weight) / 255
         left = np.sum(np.minimum(255 - moi, ans) * moi_weight) / 255
 
-        weight = overlapped - 2 * left
+        weight = overlapped - 10000 * left
 
         if best_match < weight:
             best_match = weight
             best_moi = idx
 
+    if best_match < -4e8:
+        return -1, -1, [0, 0, 0, 0]
+
     prev = max(0, len(path) - 10)
     vx = (path[-1][0] - path[prev][0]) / (occurrence_list[-1][0] - occurrence_list[prev][0])
     vy = (path[-1][1] - path[prev][1]) / (occurrence_list[-1][0] - occurrence_list[prev][0])
     for i in range(len(path) - 1, -1, -1):
-        if inside_roi(roi, path[i]) and almost_touch_roi(roi, *occurrence_list[i][1:], (vx, vy)):
+        if inside_roi(roi, path[i]) and almost_touch_roi(roi, *occurrence_list[i][1:], (vx, vy), moi_list[best_moi]):
             return best_moi + 1, occurrence_list[i][0], occurrence_list[i][1:]
         if i > 0 and not inside_roi(roi, path[i]) and inside_roi(roi, path[i - 1]):
             return best_moi + 1, occurrence_list[i][0], occurrence_list[i][1:]
@@ -220,30 +228,28 @@ def process(tracking_path, cam_id, video_id, video_path):
 
     x = np.load(tracking_path, allow_pickle=True)
 
+    num_frame = 0
     num_vehicle = 0
     class_ids = {}
-    for frame_id in range(x.shape[0]):
-        for track_id in range(x[frame_id].shape[0]):
-            class_id = int(x[frame_id][track_id][0])
-            object_id = int(x[frame_id][track_id][3])
-            num_vehicle = max(num_vehicle, object_id)
-            class_ids[object_id] = class_id
-    num_vehicle = num_vehicle + 1
+    for class_id, frame_id, _, object_id, _, _, _, _ in x:
+        num_vehicle = max(num_vehicle, object_id)
+        num_frame = max(num_frame, frame_id)
+        class_ids[object_id] = class_id
+    num_vehicle = int(num_vehicle + 1)
+    num_frame = int(num_frame + 1)
 
-    ans = [[] for i in range(x.shape[0])]
+    ans = [[] for i in range(num_frame)]
     for vehicle_id in tqdm(range(num_vehicle)):
-    # for vehicle_id in range(272, 273):
+    # for vehicle_id in range(39, 40):
         occurrence_list = []
-        for frame_id in range(x.shape[0]):
-            for track_id in range(x[frame_id].shape[0]):
-                _, _, _, object_id, x_min, y_min, x_max, y_max = x[frame_id][track_id]
-                if object_id == vehicle_id:
-                    # print(class_id, confident_score, x_min, y_min, x_max, y_max)
-                    x_min = max(1, x_min)
-                    y_min = max(1, y_min)
-                    x_max = min(width, x_max)
-                    y_max = min(height, y_max)
-                    occurrence_list.append([frame_id, x_min, y_min, x_max, y_max])
+        for class_id, frame_id, _, object_id, x_min, y_min, x_max, y_max in x:
+            if object_id == vehicle_id:
+                # print(class_id, confident_score, x_min, y_min, x_max, y_max)
+                x_min = max(1, x_min)
+                y_min = max(1, y_min)
+                x_max = min(width, x_max)
+                y_max = min(height, y_max)
+                occurrence_list.append([int(frame_id), x_min, y_min, x_max, y_max])
         if len(occurrence_list) <= 1:
             continue
         moi_id, frame_id, bbox = solve(occurrence_list, moi_list, roi, height, width, moi_weight)
@@ -252,13 +258,13 @@ def process(tracking_path, cam_id, video_id, video_path):
 
     print("Writing results to %s.txt" % video_id)
     with open("%s.txt" % video_id, "w") as f:
-        for frame_id in tqdm(range(x.shape[0])):
+        for frame_id in tqdm(range(num_frame)):
             for moi_id, _, v_type, _ in ans[frame_id]:
                 f.write(f"{video_ids[video_id]},{frame_id + 1},{moi_id},{v_type}\n")
 
     print("Creating video")
     output = cv2.VideoWriter("output_%s.mp4" % video_id, cv2.VideoWriter_fourcc("m", "p", "4", "v"), fps, (width, height))
-    for frame_id in tqdm(range(x.shape[0])):
+    for frame_id in tqdm(range(num_frame)):
         _, frame = video.read()
         for moi_id, v_id, v_type, [x1, y1, x2, y2] in ans[frame_id]:
             frame = cv2.putText(
@@ -284,15 +290,23 @@ if __name__ == "__main__":
             video_id, name = line.split(" ")
             video_ids[name.split(".")[0]] = video_id
 
-    for filename in os.listdir("videos"):
-        video_id, ext = os.path.splitext(filename)
-        if ext != ".mp4":
-            continue
+    # for filename in os.listdir("videos"):
+    #     video_id, ext = os.path.splitext(filename)
+    #     if ext != ".mp4":
+    #         continue
+    #
+    #     cam_id = "_".join(video_id.split("_")[0:2])
+    #     process(
+    #         os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
+    #         cam_id,
+    #         video_id,
+    #         os.path.join("videos", "%s.mp4" % video_id)
+    #     )
 
-        cam_id = "_".join(video_id.split("_")[0:2])
-        process(
-            os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
-            cam_id,
-            video_id,
-            os.path.join("videos", "%s.mp4" % video_id)
-        )
+    cam_id = "cam_11"
+    process(
+        os.path.join("tracking-results", "info_%s.mp4.npy" % cam_id),
+        cam_id,
+        cam_id,
+        os.path.join("videos", "%s.mp4" % cam_id)
+    )
