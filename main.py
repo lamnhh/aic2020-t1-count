@@ -290,23 +290,23 @@ if __name__ == "__main__":
             video_id, name = line.split(" ")
             video_ids[name.split(".")[0]] = video_id
 
-    # for filename in os.listdir("videos"):
-    #     video_id, ext = os.path.splitext(filename)
-    #     if ext != ".mp4":
-    #         continue
-    #
-    #     cam_id = "_".join(video_id.split("_")[0:2])
-    #     process(
-    #         os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
-    #         cam_id,
-    #         video_id,
-    #         os.path.join("videos", "%s.mp4" % video_id)
-    #     )
+    for filename in os.listdir("videos"):
+        video_id, ext = os.path.splitext(filename)
+        if ext != ".mp4":
+            continue
 
-    cam_id = "cam_11"
-    process(
-        os.path.join("tracking-results", "info_%s.mp4.npy" % cam_id),
-        cam_id,
-        cam_id,
-        os.path.join("videos", "%s.mp4" % cam_id)
-    )
+        cam_id = "_".join(video_id.split("_")[0:2])
+        process(
+            os.path.join("tracking-results", "info_%s.mp4.npy" % video_id),
+            cam_id,
+            video_id,
+            os.path.join("videos", "%s.mp4" % video_id)
+        )
+
+    # cam_id = "cam_11"
+    # process(
+    #     os.path.join("tracking-results", "info_%s.mp4.npy" % cam_id),
+    #     cam_id,
+    #     cam_id,
+    #     os.path.join("videos", "%s.mp4" % cam_id)
+    # )
